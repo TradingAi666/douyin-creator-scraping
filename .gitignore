@@ -1,0 +1,7 @@
+*.xlsx
+__pycache__/
+*.pyc
+.env
+douyin_stats.db
+/tmp/
+.DS_Store
