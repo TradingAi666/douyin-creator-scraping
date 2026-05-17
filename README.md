@@ -122,28 +122,75 @@ TELEGRAM_HOME_CHANNEL=你的Chat ID
 
 | 文件 | 说明 |
 |---|---|
-| `douyin_hourly.py` | 🔧 核心脚本（~500 行 Python + 内嵌 AppleScript） |
+| `douyin_hourly.py` | 🔧 核心抓取脚本（~500 行 Python + 内嵌 AppleScript） |
+| `douyin_new_video_tracker.py` | 🔮 新视频追踪+预测（每30分钟采集 → 同期对比 → 预测最终播放） |
+| `prediction_query.py` | 📊 查询追踪数据：最新快照 / 增长曲线 / 24h倍率 |
+| `schema.sql` | 🗃️ 完整数据库结构（含 video_tracking 预测表） |
 | `SKILL.md` | 📖 AI Agent 操作手册（含全部踩坑记录和正确的做法） |
 | `com.hermes.douyin-tracker.plist` | ⚙️ launchd 配置模板 |
 | `README.md` | 📄 你正在看的东西 |
 
+---
+
+## 🔮 新功能：视频播放预测
+
+上传新视频后，可以用 `douyin_new_video_tracker.py` 启动追踪：
+
+```bash
+# 初始化追踪（记录基线 + 首次预测）
+python3 douyin_new_video_tracker.py --init --title "你的视频标题"
+
+# 之后每30分钟跑一次，自动对比历史同期视频预测最终播放量
+python3 douyin_new_video_tracker.py --title "你的视频标题"
+```
+
+### 预测原理（v3 同期对比模型）
+
+```
+预测最终 = 当前播放 × 同期倍率中位数 × CTR修正 × 互动修正 × 均时长修正
+```
+
+1. **同期倍率**：从你的历史视频中，找到同一发布时长（如 2.3h）时的播放量，计算它们到最终播放的倍率中位数
+2. **三维质量修正**：CTR / 互动率 / 均时长 分别与同期视频做百分位对比 → 优秀者获得加成，落后则打折
+3. **置信度**：随追踪时间增长（<2h→25%，≥24h→90%），初期粗、后期准
+
+### 查询追踪数据
+
+```bash
+# 所有追踪视频的最新状态
+python3 prediction_query.py latest
+
+# 完整增长曲线
+python3 prediction_query.py growth
+
+# 24h→最终倍率（模型校准）
+python3 prediction_query.py ratios
+
+# 指定视频的完整记录
+python3 prediction_query.py track "视频标题"
+```
+
+### 配 Hermes Agent 用
+
+把追踪脚本加入 cron，每 30 分钟自动更新：
+
+```bash
+# Hermes 里一句搞定：
+@hermes 追踪新视频 --init --title "xxx"
+# 然后自动生成 48 次 cron（24h × 每30min）
+```
+
 ## 数据库结构
 
-```sql
-CREATE TABLE video_stats (
-    timestamp         DATETIME,   -- 抓取时间
-    title             TEXT,       -- 视频标题
-    publish_date      TEXT,       -- 发布时间
-    plays             INTEGER,    -- 播放量
-    avg_duration_sec  INTEGER,    -- 平均播放时长(秒)
-    ctr               REAL,       -- 5s完播率
-    likes             INTEGER,    -- 点赞
-    comments          INTEGER,    -- 评论
-    shares            INTEGER,    -- 分享
-    favorites         INTEGER,    -- 收藏
-    danmaku           INTEGER     -- 弹幕(如果有)
-);
-```
+完整 schema 见 [`schema.sql`](schema.sql)。两个模块共用同一数据库：
+
+| 表 | 写入方 | 用途 |
+|---|---|---|
+| `video_stats` | `douyin_hourly.py` | 每小时原始数据快照（为预测模型提供历史同期数据） |
+| `video_tracking` | `douyin_new_video_tracker.py` | 每30分钟检查点（含预测结果） |
+| `video_tracking_meta` | `douyin_new_video_tracker.py` | 追踪元信息（基线、活跃状态） |
+
+关键查询示例见 `schema.sql` 末尾。
 
 ## 注意事项
 
