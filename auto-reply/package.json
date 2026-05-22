@@ -1,0 +1,21 @@
+{
+  "name": "douyin-auto-reply",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "抖音评论自动回复工具 — 基于 Playwright 的评论导出与批量回复",
+  "keywords": ["douyin", "playwright", "automation", "comments", "auto-reply"],
+  "author": "",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "auth": "node ./src/auth-douyin.mjs",
+    "comments:export": "node ./src/export-douyin-comments.mjs",
+    "comments:reply": "node ./src/reply-douyin-comments.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "playwright": "^1.52.0"
+  }
+}
