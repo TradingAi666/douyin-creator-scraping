@@ -74,7 +74,7 @@ pip install openpyxl
 
 # 2. 克隆
 git clone https://github.com/TradingAi666/TzFilmdouyintool.git
-cd douyin-creator-scraping
+cd TzFilmdouyintool
 ```
 
 ### 跑一次试试
@@ -101,7 +101,7 @@ launchctl load ~/Library/LaunchAgents/com.hermes.douyin-tracker.plist
 ```bash
 # 把 SKILL.md 放到 Hermes skills 目录
 mkdir -p ~/.hermes/skills/douyin
-cp SKILL.md ~/.hermes/skills/douyin/douyin-creator-scraping.md
+cp SKILL.md ~/.hermes/skills/douyin/TzFilmdouyintool.md
 ```
 
 然后跟 Hermes 说一句：
