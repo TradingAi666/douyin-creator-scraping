@@ -152,7 +152,7 @@ def run_js_file(js_path, tab_contains="creator.douyin.com", timeout=30):
 
 
 def reload_page():
-    """激活抖音标签到前台并刷新（避免后台 Chrome 节流 + user-gesture 拦截）"""
+    """激活抖音标签到前台，强制导航到旧版 data-center/content（新版 /content/manage 没有导出按钮），然后刷新"""
     script = '''
     tell application "Google Chrome"
         activate
@@ -164,6 +164,8 @@ def reload_page():
                 if (URL of t) contains "creator.douyin.com" then
                     set active tab index of w to tabIndex
                     set index of w to 1
+                    set URL of t to "https://creator.douyin.com/creator-micro/data-center/content"
+                    delay 3
                     reload t
                     set found to true
                     exit repeat
@@ -240,14 +242,34 @@ def click_export_button():
 
 
 def wait_for_download(before_ts, timeout=40):
-    """每秒用 AppleScript 把新文件从 ~/Downloads 搬到 /tmp，搬来后再读"""
+    """Chrome 直接下载到 /tmp/douyin_dl，直接轮询检测"""
+    import glob as _glob
     for i in range(timeout):
         time.sleep(1)
-        moved = move_latest_xlsx_via_applescript(before_ts)
-        if moved and os.path.exists(moved):
-            time.sleep(0.5)  # 等 mv 真正完成
-            log(f"✅ 下载完成（已搬运）: {os.path.basename(moved)}")
-            return moved
+        pattern = os.path.join(DOWNLOADS_DIR, '作品列表*.xlsx')
+        files = sorted(_glob.glob(pattern), key=os.path.getmtime, reverse=True)
+        for f in files:
+            mtime = os.path.getmtime(f)
+            if mtime > before_ts:
+                # 验证是真正的 xlsx（PK header）
+                with open(f, 'rb') as fh:
+                    header = fh.read(2)
+                if header != b'PK':
+                    body = ''
+                    try:
+                        with open(f, 'r', errors='ignore') as fh2:
+                            body = fh2.read(200)
+                    except:
+                        pass
+                    if '未登录' in body or 'StatusCode' in body:
+                        log(f"❌ 登录态过期: {body[:100]}")
+                    else:
+                        log(f"⚠️ 非xlsx文件({len(body)}B): {body[:80]}")
+                    os.remove(f)
+                    continue
+                time.sleep(0.5)
+                log(f"✅ 下载完成: {os.path.basename(f)}")
+                return f
         if (i + 1) % 10 == 0:
             log(f"  等待下载... {i+1}s")
     log("❌ 等待下载超时")
@@ -398,11 +420,55 @@ def build_report(videos, total_inserted, now_str):
     return "\n".join(lines)
 
 
+def health_check():
+    """采集前验证：AppleScript JS 是否开启、是否已登录。
+    返回 (ok, reason)"""
+    test_js = "/tmp/dy_health_check.js"
+    with open(test_js, "w") as f:
+        f.write("(function(){ return 'js_ok'; })()")
+    
+    script = f'''
+    tell application "Google Chrome"
+        repeat with w in windows
+            repeat with t in tabs of w
+                if (URL of t) contains "creator.douyin.com" then
+                    set js to read POSIX file "{test_js}"
+                    return execute t javascript js
+                end if
+            end repeat
+        end repeat
+        return "no_tab"
+    end tell
+    '''
+    try:
+        result = subprocess.check_output(['osascript', '-e', script], timeout=15).decode()
+    except subprocess.TimeoutExpired:
+        return False, "⏱️ AppleScript 执行超时"
+    except Exception as e:
+        err = str(e)
+        if "Allow JavaScript" in err or "JavaScript 的功能已关闭" in err:
+            return False, "🔧 AppleScript JS 已关闭 → Chrome 菜单栏：查看 → 开发者 → 勾选「允许 Apple 事件中的 JavaScript」"
+        return False, f"⚠️ AppleScript 异常: {err[:120]}"
+    
+    if result.strip() == "no_tab":
+        return False, "📄 未找到 creator.douyin.com 标签页"
+    if "js_ok" not in result:
+        return False, f"⚠️ JS 返回异常: {result[:100]}"
+    
+    return True, "ok"
+
+
 def main():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log("=" * 50)
     log(f"🚀 开始抓取抖音数据 - {now_str}")
     log(f"HOME={_HOME} DOWNLOADS={DOWNLOADS_DIR} exists={os.path.exists(DOWNLOADS_DIR)}")
+
+    # 0. 健康检查（2秒快速验证 AppleScript JS）
+    ok, reason = health_check()
+    if not ok:
+        send_telegram(f"❌ <b>抖音数据抓取失败</b>\n🕐 {now_str}\n{reason}")
+        return
 
     # 1. 刷新页面
     if not reload_page():
