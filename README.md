@@ -73,7 +73,7 @@
 pip install openpyxl
 
 # 2. 克隆
-git clone https://github.com/TradingAi666/douyin-creator-scraping.git
+git clone https://github.com/TradingAi666/TzFilmdouyintool.git
 cd douyin-creator-scraping
 ```
 
