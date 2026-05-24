@@ -189,6 +189,94 @@ def reload_page():
         return False
 
 
+def scrape_total_followers():
+    """从当前页面侧边栏提取粉丝总量（无需导航），今日新增由 save_account_stats 从 DB 差值计算"""
+    # 直接从当前页面提取（侧边栏在创作者中心所有页面都可见）
+    js = r"""(function(){
+    var result = {fans: 0};
+    var body = document.body.innerText.replace(/\n/g, ' ');
+    // Find 粉丝 by char code
+    var idx = -1;
+    for (var i = 0; i < body.length - 1; i++) {
+        if (body.charCodeAt(i) === 31881 && body.charCodeAt(i+1) === 19997) {
+            idx = i; break;
+        }
+    }
+    if (idx >= 0) {
+        var after = body.substring(idx + 2).trim();
+        var m = after.match(/^\s*([\d.]+)\s*\u4e07?/);
+        if (m) {
+            var raw = parseFloat(m[1]);
+            result.fans = after.indexOf('\u4e07') >= 0 && after.indexOf('\u4e07') < 10 
+                ? Math.round(raw * 10000) : Math.round(raw);
+        }
+        result.after = after.substring(0, 30);
+    }
+    result.idx = idx;
+    result.bodyTail = body.substring(Math.max(0, body.length - 200));
+    return JSON.stringify(result);
+    })()"""
+
+    js_path = '/tmp/dy_follower_js.js'
+    with open(js_path, 'w') as f:
+        f.write(js)
+
+    try:
+        raw = run_js_file(js_path, timeout=15)
+        if raw:
+            data = json.loads(raw)
+            fans = int(data.get('fans', 0))
+            debug = data.get('bodyTail', data.get('debug', ''))
+            log(f"粉丝: {fans} | idx={data.get('idx')} after={data.get('after','')} tail={debug[-100:]}")
+            return {'fans': fans}
+    except Exception as e:
+        log(f"JS 提取粉丝失败: {e}")
+
+    return None
+
+
+def save_account_stats(data):
+    """存入 account_stats 表，今日新增从 DB 差值计算"""
+    if not data:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS account_stats (
+            timestamp DATETIME, total_fans INTEGER, today_new_fans INTEGER
+        )
+    """)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    current_fans = data['fans']
+
+    # 今日新增 = 当前总粉丝 - 今日首次抓取的总粉丝（或昨日最后的总粉丝）
+    today_start = datetime.now().strftime("%Y-%m-%d") + " 00:00:00"
+    first_today = cur.execute(
+        "SELECT total_fans FROM account_stats WHERE timestamp >= ? AND total_fans > 0 ORDER BY timestamp ASC LIMIT 1",
+        (today_start,)
+    ).fetchone()
+
+    if first_today and first_today[0] > 0:
+        today_new = current_fans - first_today[0]
+    else:
+        # 今天还没抓过，用昨天最后一次作为基准
+        yesterday_end = datetime.now().strftime("%Y-%m-%d") + " 00:00:00"
+        last_yesterday = cur.execute(
+            "SELECT total_fans FROM account_stats WHERE timestamp < ? AND total_fans > 0 ORDER BY timestamp DESC LIMIT 1",
+            (yesterday_end,)
+        ).fetchone()
+        if last_yesterday and last_yesterday[0] > 0:
+            today_new = current_fans - last_yesterday[0]
+        else:
+            today_new = 0
+
+    cur.execute("INSERT INTO account_stats VALUES (?, ?, ?)",
+                (now, current_fans, today_new))
+    conn.commit()
+    conn.close()
+    log(f"💾 粉丝数据已入库: {current_fans} (+{today_new})")
+
+
 def switch_to_list_tab():
     """切换到投稿列表标签"""
     js = """
@@ -317,6 +405,8 @@ def parse_xlsx(filepath):
         share_idx   = col(['分享量', '分享'])
         comment_idx = col(['评论量', '评论'])
         fav_idx     = col(['收藏量', '收藏'])
+        profile_idx = col(['主页访问量', '主页访问'])
+        follower_idx= col(['粉丝增量', '涨粉'])
 
         def safe_float(row, idx, default=0.0):
             if idx is None: return default
@@ -338,6 +428,7 @@ def parse_xlsx(filepath):
             ctr5s    = round(safe_float(row, ctr5s_idx) * 100, 2) if ctr5s_idx and safe_float(row, ctr5s_idx) < 1 else safe_float(row, ctr5s_idx)
             ctrcov   = round(safe_float(row, ctrcov_idx) * 100, 2) if ctrcov_idx and safe_float(row, ctrcov_idx) < 1 else safe_float(row, ctrcov_idx)
             bounce   = round(safe_float(row, bounce_idx) * 100, 2) if bounce_idx and safe_float(row, bounce_idx) < 1 else safe_float(row, bounce_idx)
+            finish   = round(safe_float(row, finish_idx) * 100, 2) if finish_idx and safe_float(row, finish_idx) < 1 else safe_float(row, finish_idx)
             duration = round(safe_float(row, dur_idx), 1)
             likes    = safe_int(row, like_idx)
             shares   = safe_int(row, share_idx)
@@ -345,12 +436,15 @@ def parse_xlsx(filepath):
             favorites= safe_int(row, fav_idx)
 
             status   = str(row[status_idx]).strip() if status_idx is not None and row[status_idx] else ''
+            profile_visits = safe_int(row, profile_idx)
+            follower_gain  = safe_int(row, follower_idx)
             videos.append({
                 'title': title, 'pub_date': pub_date, 'status': status,
                 'plays': plays, 'ctr5s': ctr5s, 'ctrcov': ctrcov,
-                'bounce': bounce, 'duration': duration,
+                'bounce': bounce, 'duration': duration, 'finish': finish,
                 'likes': likes, 'shares': shares,
                 'comments': comments, 'favorites': favorites,
+                'profile_visits': profile_visits, 'follower_gain': follower_gain,
             })
 
         log(f"解析到 {len(videos)} 条视频")
@@ -373,21 +467,32 @@ def save_to_db(videos):
             plays INTEGER,
             avg_duration_sec INTEGER,
             ctr REAL,
+            finish_rate REAL,
             likes INTEGER,
             comments INTEGER,
             shares INTEGER,
             favorites INTEGER,
-            danmaku INTEGER
+            danmaku INTEGER,
+            status TEXT,
+            profile_visits INTEGER,
+            follower_gain INTEGER
         )
     """)
+    # Add missing columns if table already exists
+    for col in ['status', 'profile_visits', 'follower_gain']:
+        try:
+            cursor.execute(f"ALTER TABLE video_stats ADD COLUMN {col} {'TEXT' if col == 'status' else 'INTEGER'}")
+        except:
+            pass
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for v in videos:
         cursor.execute(
-            "INSERT INTO video_stats VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO video_stats (timestamp, title, publish_date, plays, avg_duration_sec, ctr, finish_rate, likes, comments, shares, favorites, danmaku, status, profile_visits, follower_gain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (now, v['title'], v['pub_date'],
-             v['plays'], int(v['duration']), v['ctr5s'],
+             v['plays'], int(v['duration']), v['ctr5s'], v.get('finish', 0),
              v['likes'], v['comments'], v['shares'],
-             v['favorites'], 0)
+             v['favorites'], 0, v.get('status', ''),
+             v.get('profile_visits', 0), v.get('follower_gain', 0))
         )
     conn.commit()
     conn.close()
@@ -412,7 +517,7 @@ def build_report(videos, total_inserted, now_str):
             f"<b>{i}. {title}</b>\n"
             f"   📅 {v['pub_date']}\n"
             f"   ▶️ 播放 <b>{v['plays']:,}</b> | 封面点击 {v['ctrcov']}%\n"
-            f"   ✅ 5s完播 {v['ctr5s']}% | 均时长 {v['duration']}s\n"
+            f"   ✅ 5s完播 {v['ctr5s']}% | 完播率 {v.get('finish', 'N/A')}% | 均时长 {v['duration']}s\n"
             f"   ❤️ 点赞 {v['likes']:,} | 💬 评论 {v['comments']:,} | 🔁 分享 {v['shares']:,}"
         )
         if i < len(top3):
@@ -464,29 +569,41 @@ def main():
     log(f"🚀 开始抓取抖音数据 - {now_str}")
     log(f"HOME={_HOME} DOWNLOADS={DOWNLOADS_DIR} exists={os.path.exists(DOWNLOADS_DIR)}")
 
-    # 0. 健康检查（2秒快速验证 AppleScript JS）
-    ok, reason = health_check()
-    if not ok:
-        send_telegram(f"❌ <b>抖音数据抓取失败</b>\n🕐 {now_str}\n{reason}")
+    # 0. 并发锁：防止手动运行和 cronjob 同时抢 Chrome
+    lock_file = os.path.expanduser("~/.hermes/.douyin_scrape.lock")
+    import fcntl
+    lock_fd = open(lock_file, 'w')
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log("⚠️ 已有抓取进程在运行，跳过本次")
+        send_telegram(f"⏭️ <b>跳过本次抓取</b>\n🕐 {now_str}\n上一个抓取进程尚未完成")
         return
 
-    # 1. 刷新页面
-    if not reload_page():
-        send_telegram(f"❌ <b>抖音数据抓取失败</b>\n🕐 {now_str}\n未找到抖音创作者中心标签页")
-        return
+    try:
+        # 健康检查（2秒快速验证 AppleScript JS）
+        ok, reason = health_check()
+        if not ok:
+            send_telegram(f"❌ <b>抖音数据抓取失败</b>\n🕐 {now_str}\n{reason}")
+            return
 
-    # 2. 等待页面加载
-    log("等待页面加载 (15秒)...")
-    time.sleep(15)
+        # 1. 刷新页面
+        if not reload_page():
+            send_telegram(f"❌ <b>抖音数据抓取失败</b>\n🕐 {now_str}\n未找到抖音创作者中心标签页")
+            return
 
-    # 3. 切换到投稿列表
-    if not switch_to_list_tab():
-        log("⚠️ 切换投稿列表失败，重试...")
-        time.sleep(3)
-        switch_to_list_tab()
+        # 2. 等待页面加载
+        log("等待页面加载 (15秒)...")
+        time.sleep(15)
 
-    # 4. 点击"刷新数据"按钮，确保数据最新
-    refresh_js = """
+        # 3. 切换到投稿列表
+        if not switch_to_list_tab():
+            log("⚠️ 切换投稿列表失败，重试...")
+            time.sleep(3)
+            switch_to_list_tab()
+
+        # 4. 点击"刷新数据"按钮，确保数据最新
+        refresh_js = """
 (function(){
     var btns = Array.from(document.querySelectorAll('button'));
     var found = btns.filter(function(b){
@@ -498,58 +615,79 @@ def main():
     return 'refresh btn not found';
 })()
 """
-    tmp = "/tmp/dy_refresh.js"
-    with open(tmp, "w") as f:
-        f.write(refresh_js)
-    r = run_js_file(tmp)
-    log(f"点击刷新数据: {r}")
-    time.sleep(4)  # 等数据刷新完成
+        tmp = "/tmp/dy_refresh.js"
+        with open(tmp, "w") as f:
+            f.write(refresh_js)
+        r = run_js_file(tmp)
+        log(f"点击刷新数据: {r}")
+        time.sleep(4)  # 等数据刷新完成
 
-    # 5. 轮询等待投稿列表的导出按钮出现（最多等30秒）
-    log("等待投稿列表导出按钮出现...")
-    before_ts = time.time() - 1  # 记录点击前的时间，全程只用这一个
-    clicked = False
-    for attempt in range(15):
-        time.sleep(2)
-        if click_export_button():
-            clicked = True
-            break
-        log(f"  第{attempt+1}次未找到导出按钮，继续等待...")
-    if not clicked:
-        send_telegram(f"⚠️ <b>抖音数据抓取失败</b>\n🕐 {now_str}\n等待导出按钮超时")
-        return
+        # 5. 轮询等待投稿列表的导出按钮出现（最多等30秒）
+        log("等待投稿列表导出按钮出现...")
+        before_ts = time.time() - 1  # 记录点击前的时间，全程只用这一个
+        clicked = False
+        for attempt in range(15):
+            time.sleep(2)
+            if click_export_button():
+                clicked = True
+                break
+            log(f"  第{attempt+1}次未找到导出按钮，继续等待...")
+        if not clicked:
+            send_telegram(f"⚠️ <b>抖音数据抓取失败</b>\n🕐 {now_str}\n等待导出按钮超时")
+            return
 
-    xlsx_path = wait_for_download(before_ts)
-    if not xlsx_path:
-        # 下载超时，重试一次点击导出（before_ts 不变，确保能检测到之前已下载的文件）
-        log("⚠️ 下载超时，重试点击导出按钮...")
-        click_export_button()
         xlsx_path = wait_for_download(before_ts)
-    if not xlsx_path:
-        send_telegram(f"❌ <b>抖音数据抓取失败</b>\n🕐 {now_str}\n下载超时，请检查 Chrome 是否打开抖音创作者中心")
-        return
+        if not xlsx_path:
+            # 下载超时，重试一次点击导出（before_ts 不变，确保能检测到之前已下载的文件）
+            log("⚠️ 下载超时，重试点击导出按钮...")
+            click_export_button()
+            xlsx_path = wait_for_download(before_ts)
+        if not xlsx_path:
+            send_telegram(f"❌ <b>抖音数据抓取失败</b>\n🕐 {now_str}\n下载超时，请检查 Chrome 是否打开抖音创作者中心")
+            return
 
-    # 6. 解析数据
-    videos = parse_xlsx(xlsx_path)
-    if not videos:
-        send_telegram(f"⚠️ <b>抖音数据解析失败</b>\n🕐 {now_str}\nExcel 解析失败")
-        return
+        # 6. 解析数据
+        videos = parse_xlsx(xlsx_path)
+        if not videos:
+            send_telegram(f"⚠️ <b>抖音数据解析失败</b>\n🕐 {now_str}\nExcel 解析失败")
+            return
 
-    # 7. 存入数据库
-    inserted = save_to_db(videos)
-    log(f"已入库 {inserted} 条")
+        # 7. 存入数据库
+        inserted = save_to_db(videos)
+        log(f"已入库 {inserted} 条")
 
-    # 8. 删除临时文件
-    try:
-        os.remove(xlsx_path)
-        log(f"已删除临时文件: {os.path.basename(xlsx_path)}")
-    except:
-        pass
+        # 8. 删除临时文件
+        try:
+            os.remove(xlsx_path)
+            log(f"已删除临时文件: {os.path.basename(xlsx_path)}")
+        except:
+            pass
 
-    # 9. Telegram 汇报最新3条
-    report = build_report(videos, inserted, now_str)
-    send_telegram(report)
-    log("✅ 完成")
+        # 9. Telegram 汇报最新3条
+        report = build_report(videos, inserted, now_str)
+        send_telegram(report)
+
+        # 10. 抓取总粉丝数据
+        try:
+            follower_data = scrape_total_followers()
+            if follower_data:
+                save_account_stats(follower_data)
+        except Exception as e:
+            log(f"粉丝抓取跳过: {e}")
+
+        # 11. 同步到飞书多维表格
+        try:
+            import subprocess as _sp
+            _sp.run(['python3', os.path.expanduser('~/.hermes/scripts/feishu_sync.py')],
+                    timeout=300, capture_output=True, close_fds=True)
+            log("飞书同步完成")
+        except Exception as e:
+            log(f"飞书同步跳过: {e}")
+
+        log("✅ 完成")
+    finally:
+        # 释放锁
+        lock_fd.close()
 
 
 if __name__ == '__main__':
