@@ -535,34 +535,35 @@ rm -f ~/.hermes/.douyin_scrape.lock
 | Lock persists after parent process exits | Child process inherits open file description |
 | `ps aux` shows zero douyin processes | Parent exited, child still running feishu_sync |
 
-## Pitfall #10: `scrape_total_followers` AppleScript Navigation Times Out (2026-05-24)
+## Pitfall #10: `scrape_total_followers` — Garfish Isolation + AppleScript Fix (2026-05-24)
 
-The `scrape_total_followers()` function originally used AppleScript to navigate to
-`creator-micro/home`, looping through ALL Chrome windows/tabs without `exit repeat`.
-With many open tabs, the `delay 5` per matching tab caused the 20s timeout.
+The `scrape_total_followers()` function must navigate to `/creator-micro/home` to extract
+fans because the **Garfish micro-frontend at `/data-center/content` does NOT contain the
+sidebar** in `document.body.innerText`. The sidebar (with "关注 N 粉丝 N.N万") lives in
+the parent frame outside Garfish.
 
-**Fix: Remove AppleScript navigation entirely.** The creator center sidebar shows
-"粉丝 N.N万" on **every page** — no need to navigate to home. Extract directly
-from the current page's `document.body.innerText`.
-
-```python
-def scrape_total_followers():
-    """从当前页面侧边栏提取粉丝总量（无需导航）"""
-    js = r"""(function(){
-        var result = {fans: 0};
-        var body = document.body.innerText.replace(/\n/g, ' ');
-        // Find 粉丝 by charCode (use charCode, never string literal — see Pitfall #7)
-        ...
-        return JSON.stringify(result);
-    })()"""
-    raw = run_js_file('/tmp/dy_follower_js.js', timeout=15)
+**Fix**: AppleScript navigates to home page with proper `exit repeat`, then runs JS:
+```applescript
+tell application "Google Chrome"
+    activate
+    repeat with w in windows
+        if found then exit repeat
+        repeat with t in tabs of w
+            if (URL of t) contains "creator.douyin.com" then
+                set URL of t to "https://creator.douyin.com/creator-micro/home"
+                delay 6
+                set js to read POSIX file "/tmp/dy_follower_js_v2.js"
+                return execute t javascript js
+            end if
+        end repeat
+    end repeat
+end tell
 ```
 
-| Symptom | Root cause |
-|---|---|
-| `导航首页失败: timed out after 20 seconds` | Nested loop × delay per tab × no exit |
-| Fans data missing from account_stats | Function returns None on timeout |
-| `粉丝: 48500 (今日+0)` but actual is 48900 | Stale data from last successful run |
+**JS pattern**: `body.match(/\u5173\u6ce8\s*[\d,]+\s*\u7c89\u4e1d\s*([\d.]+)\s*\u4e07/)` — matches "关注 N 粉丝 N.N万".
+
+**Timing**: Fan extraction runs at step 10 (after data-center export + Telegram report),
+when navigation to home won't break anything. `close_fds=True` on subprocess prevents lock leak.
 
 ## Pitfall #11: `today_new_fans` Always 0 — Page Has No Daily New Fans Field (2026-05-24)
 

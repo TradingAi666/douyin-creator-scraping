@@ -190,48 +190,42 @@ def reload_page():
 
 
 def scrape_total_followers():
-    """从当前页面侧边栏提取粉丝总量（无需导航），今日新增由 save_account_stats 从 DB 差值计算"""
-    # 直接从当前页面提取（侧边栏在创作者中心所有页面都可见）
-    js = r"""(function(){
-    var result = {fans: 0};
-    var body = document.body.innerText.replace(/\n/g, ' ');
-    // Find 粉丝 by char code
-    var idx = -1;
-    for (var i = 0; i < body.length - 1; i++) {
-        if (body.charCodeAt(i) === 31881 && body.charCodeAt(i+1) === 19997) {
-            idx = i; break;
-        }
-    }
-    if (idx >= 0) {
-        var after = body.substring(idx + 2).trim();
-        var m = after.match(/^\s*([\d.]+)\s*\u4e07?/);
-        if (m) {
-            var raw = parseFloat(m[1]);
-            result.fans = after.indexOf('\u4e07') >= 0 && after.indexOf('\u4e07') < 10 
-                ? Math.round(raw * 10000) : Math.round(raw);
-        }
-        result.after = after.substring(0, 30);
-    }
-    result.idx = idx;
-    result.bodyTail = body.substring(Math.max(0, body.length - 200));
-    return JSON.stringify(result);
-    })()"""
-
-    js_path = '/tmp/dy_follower_js.js'
-    with open(js_path, 'w') as f:
-        f.write(js)
-
+    """导航到首页提取粉丝，今日新增由 save_account_stats 从 DB 差值计算"""
+    # AppleScript: 找到 creator.douyin.com 标签 → 导航到首页 → 等待加载 → 执行 JS
+    script = '''
+    tell application "Google Chrome"
+        activate
+        set found to false
+        repeat with w in windows
+            if found then exit repeat
+            set tabIndex to 0
+            repeat with t in tabs of w
+                set tabIndex to tabIndex + 1
+                if (URL of t) contains "creator.douyin.com" then
+                    set active tab index of w to tabIndex
+                    set index of w to 1
+                    set URL of t to "https://creator.douyin.com/creator-micro/home"
+                    delay 6
+                    set js to read POSIX file "/tmp/dy_follower_js_v2.js"
+                    set jsResult to execute t javascript js
+                    return jsResult
+                end if
+            end repeat
+        end repeat
+        return "no_tab"
+    end tell
+    '''
     try:
-        raw = run_js_file(js_path, timeout=15)
-        if raw:
+        raw = subprocess.check_output(['osascript', '-e', script], timeout=30).decode('utf-8').strip()
+        if raw and raw != 'no_tab':
             data = json.loads(raw)
             fans = int(data.get('fans', 0))
-            debug = data.get('bodyTail', data.get('debug', ''))
-            log(f"粉丝: {fans} | idx={data.get('idx')} after={data.get('after','')} tail={debug[-100:]}")
+            log(f"粉丝: {fans} | head={data.get('bodyHead','')[:80]}")
             return {'fans': fans}
+        elif raw == 'no_tab':
+            log("粉丝抓取: 未找到 creator.douyin.com 标签")
     except Exception as e:
-        log(f"JS 提取粉丝失败: {e}")
-
+        log(f"粉丝抓取失败: {e}")
     return None
 
 
@@ -667,7 +661,7 @@ def main():
         report = build_report(videos, inserted, now_str)
         send_telegram(report)
 
-        # 10. 抓取总粉丝数据
+        # 10. 抓取总粉丝数据（导航到首页提取）
         try:
             follower_data = scrape_total_followers()
             if follower_data:
