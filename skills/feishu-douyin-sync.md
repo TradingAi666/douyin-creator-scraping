@@ -28,41 +28,37 @@ platforms: [macos]
 ## 飞书表结构
 
 ### Base
-- URL: `https://ocnxddexrh6x.feishu.cn/base/M2GTb9hzMaRbbOse6V6cpkNcnSW`
-- Token: `M2GTb9hzMaRbbOse6V6cpkNcnSW`
+- URL: `https://YOUR_DOMAIN.feishu.cn/base/YOUR_BASE_TOKEN`
+- Token: `YOUR_BASE_TOKEN`
 
-### 表1：视频数据总览 (`tblZaykpVltZrmbT`)
-字段：文本(标题key), 发布时间, 播放量, 点赞, 评论, 分享, 收藏, 5s完播率(%), 完播率(%), 均时长(s), 互动率(%), 主页访问量, 粉丝增量, 更新时间
+### 表1：视频数据总览 (`YOUR_TABLE_OVERVIEW_ID`)
+字段：文本(标题key), 发布时间, 播放量, 点赞, 评论, 分享, 收藏, 5s完播率(%), 完播率(%), 均时长(s), 互动率(%), 主页访问量, 粉丝增量, 均速/小时, 更新时间
 
-### 表2：最新作品追踪 (`tblt7b8ZSHRLbmrS`)
-字段：多行文本(固定key="最新追踪"), 检查时间, 已发布小时, 播放量, 增量(时速), 点赞, 评论, 5s完播率(%), 互动率(%), 均时长(s), 预测播放, 预测等级, 置信度(%), 趋势
+### 表2：最新作品追踪 (`YOUR_TABLE_TRACKING_ID`)
+字段：多行文本(固定key="最新追踪"), 检查时间, 已发布小时, 播放量, 增量, 点赞, 评论, 5s完播率(%), 互动率(%), 均时长(s), 预测播放, 预测等级, 置信度(%), 趋势
 
-**设计**：单行模式 — 固定 key `"最新追踪"`。每次 `sync_tracking()` 先 DELETE 所有旧行，再 UPSERT 一行。飞书仪表盘指到这一行，数据自动刷新，无需手动清表。
-
-### 表3：账号总览 (`tblrVLadypRaI5qU`)
-字段：多行文本(时间key), 总粉丝数, 今日新增
-
-注意：表3 首列 key 字段名是「多行文本」不是「文本」。
+### 表3：账号总览 (`YOUR_TABLE_ACCOUNT_ID`)
 
 ## API 凭证
 
-```python
-APP_ID = "cli_aa9bc01eab789cc5"
-APP_SECRET = "VpUQKLK6w5zzbpIYDs1ThbL54CazDpLB"
-BASE_TOKEN = "M2GTb9hzMaRbbOse6V6cpkNcnSW"
-TABLE_OVERVIEW = "tblZaykpVltZrmbT"
-TABLE_TRACKING = "tblt7b8ZSHRLbmrS"
-TABLE_ACCOUNT  = "tblrVLadypRaI5qU"
-```
+⚠️ **所有秘钥从 `~/.hermes/.env` 读取，代码中不硬编码。**
 
-Token 获取：`POST /open-apis/auth/v3/tenant_access_token/internal`，缓存 3600 秒。
+```bash
+# ~/.hermes/.env
+FEISHU_APP_ID=YOUR_APP_ID
+FEISHU_APP_SECRET=YOUR_APP_SECRET
+FEISHU_BASE_TOKEN=YOUR_BASE_TOKEN
+FEISHU_TABLE_OVERVIEW=YOUR_TABLE_OVERVIEW_ID
+FEISHU_TABLE_TRACKING=YOUR_TABLE_TRACKING_ID
+FEISHU_TABLE_ACCOUNT=YOUR_TABLE_ACCOUNT_ID
+```
 
 ## 权限
 
 用户设为 `full_access`（通过 Drive API）：
 ```python
 POST /open-apis/drive/v1/permissions/{BASE_TOKEN}/members?type=bitable
-{"member_type": "openid", "member_id": "ou_53172d97e2bc03e6ad6d1490e05f9b94", "perm": "full_access"}
+{"member_type": "openid", "member_id": "YOUR_OPENID", "perm": "full_access"}
 ```
 
 App 权限（飞书开发者后台）：`bitable:app`, `drive:drive:readonly`

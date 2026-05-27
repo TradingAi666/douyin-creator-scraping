@@ -20,12 +20,12 @@ def _load_env_var(key):
         pass
     return None
 
-APP_ID = _load_env_var("FEISHU_APP_ID") or "cli_aa9bc01eab789cc5"
-APP_SECRET = _load_env_var("FEISHU_APP_SECRET") or "YOUR_SECRET"
-BASE_TOKEN = _load_env_var("FEISHU_BASE_TOKEN") or "YOUR_TOKEN"
-TABLE_OVERVIEW = _load_env_var("FEISHU_TABLE_OVERVIEW") or "tblZaykpVltZrmbT"
-TABLE_TRACKING = _load_env_var("FEISHU_TABLE_TRACKING") or "tblt7b8ZSHRLbmrS"
-TABLE_ACCOUNT  = _load_env_var("FEISHU_TABLE_ACCOUNT") or "tblrVLadypRaI5qU"
+APP_ID = _load_env_var("FEISHU_APP_ID") or "YOUR_APP_ID"
+APP_SECRET = _load_env_var("FEISHU_APP_SECRET") or "YOUR_APP_SECRET"
+BASE_TOKEN = _load_env_var("FEISHU_BASE_TOKEN") or "YOUR_BASE_TOKEN"
+TABLE_OVERVIEW = _load_env_var("FEISHU_TABLE_OVERVIEW") or "YOUR_TABLE_OVERVIEW"
+TABLE_TRACKING = _load_env_var("FEISHU_TABLE_TRACKING") or "YOUR_TABLE_TRACKING"
+TABLE_ACCOUNT  = _load_env_var("FEISHU_TABLE_ACCOUNT") or "YOUR_TABLE_ACCOUNT"
 DB_PATH = os.path.expanduser("~/.hermes/douyin_stats.db")
 
 def api(method, path, data=None):
